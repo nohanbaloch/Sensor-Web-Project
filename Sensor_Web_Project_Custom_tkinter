@@ -7,10 +7,15 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.pyplot as plt
 from PIL import Image, ImageTk
 import io
+from datetime import datetime
+import os
+from dotenv import load_dotenv
 
-NASA_API_KEY = 'your_nasa_api_key'
-WEATHER_API_KEY = 'your_weather_api_key'
+# Load environment variables from .env file
+load_dotenv()
 
+NASA_API_KEY = os.getenv('NASA_API_KEY')
+WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
 
 def generate_sensor_data(num_points=100):
     return np.random.normal(25, 5, num_points).tolist()
@@ -40,39 +45,43 @@ def fetch_weather_data(lat, lon):
     response = requests.get(url, params=params)
     return response.json() if response.status_code == 200 else None
 
-def fetch_location_name(lat, lon):
-    url = f"http://api.openweathermap.org/geo/1.0/reverse"
+def fetch_coordinates(location_name):
+    url = f"http://api.openweathermap.org/geo/1.0/direct"
     params = {
-        'lat': lat,
-        'lon': lon,
+        'q': location_name,
         'limit': 1,
         'appid': WEATHER_API_KEY
     }
     response = requests.get(url, params=params)
-    return response.json()[0].get('name', 'Unknown Location') if response.status_code == 200 else "Unknown Location"
+    if response.status_code == 200 and response.json():
+        location_data = response.json()[0]
+        return location_data.get('lat'), location_data.get('lon'), location_data.get('name')
+    return None, None, None
 
 def detect_anomalies(data):
     model = IsolationForest(contamination=0.1, random_state=42)
     predictions = model.fit_predict(np.array(data).reshape(-1, 1))
     return [i for i, val in enumerate(predictions) if val == -1]
 
-def detect_wildfire(weather_data):
+def detect_heat_wave(weather_data):
     temp = weather_data['main']['temp']
     humidity = weather_data['main']['humidity']
-    wind_speed = weather_data['wind']['speed']
-    return temp > 35 and humidity < 20 and wind_speed > 5
+    return temp > 32 and humidity > 60  # Heat wave conditions: high temperature and high humidity
 
-def plot_data(data, anomalies, wildfire_risk):
-    fig, ax = plt.subplots()
+def plot_data(data, anomalies, heat_wave_risk):
+    # Create a figure without adding it to the global pyplot state to save memory
+    fig = plt.figure(figsize=(6, 4))
+    ax = fig.add_subplot(111)
     ax.plot(data, label='Sensor Data')
     ax.scatter(anomalies, [data[i] for i in anomalies], color='r', label='Anomalies')
-    if wildfire_risk:
-        ax.axhline(y=35, color='orange', linestyle='--', label='Wildfire Risk Threshold')
+    if heat_wave_risk:
+        ax.axhline(y=32, color='red', linestyle='--', label='Heat Wave Threshold')
     ax.set_xlabel('Time')
     ax.set_ylabel('Temperature')
     ax.legend()
     ax.grid(True)
     return fig
+    
 
 class SensorWebApp(ctk.CTk):
     def __init__(self):
@@ -84,19 +93,18 @@ class SensorWebApp(ctk.CTk):
 
         self.sensor_data = generate_sensor_data()
         self.anomalies = []
-        self.wildfire_risk = False
+        self.heat_wave_risk = False
+        self.plot_canvas_widget = None
 
         self.create_layout()
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def create_layout(self):
         self.left_frame = ctk.CTkFrame(self, width=700)
         self.left_frame.pack(side="left", fill="both", expand=True, padx=20, pady=20)
 
-        self.lat_entry = ctk.CTkEntry(self.left_frame, placeholder_text="Enter Latitude")
-        self.lat_entry.pack(pady=10)
-
-        self.lon_entry = ctk.CTkEntry(self.left_frame, placeholder_text="Enter Longitude")
-        self.lon_entry.pack(pady=10)
+        self.location_entry = ctk.CTkEntry(self.left_frame, placeholder_text="Enter Location (e.g., London, Tokyo, New York)")
+        self.location_entry.pack(pady=10)
 
         self.btn_fetch = ctk.CTkButton(self.left_frame, text="Fetch Location & Analyze", command=self.fetch_location_and_analyze)
         self.btn_fetch.pack(pady=20)
@@ -118,14 +126,15 @@ class SensorWebApp(ctk.CTk):
         self.btn_fetch_image.pack(pady=20)
 
     def fetch_location_and_analyze(self):
-        try:
-            lat = float(self.lat_entry.get())
-            lon = float(self.lon_entry.get())
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numerical values for latitude and longitude.")
+        location_name = self.location_entry.get().strip()
+        if not location_name:
+            messagebox.showerror("Invalid Input", "Please enter a location name.")
             return
 
-        location_name = fetch_location_name(lat, lon)
+        lat, lon, location_name = fetch_coordinates(location_name)
+        if lat is None or lon is None:
+            messagebox.showerror("Error", "Could not find the specified location.")
+            return
         weather_data = fetch_weather_data(lat, lon)
 
         if weather_data:
@@ -134,25 +143,38 @@ class SensorWebApp(ctk.CTk):
             humidity = weather_data['main']['humidity']
             wind_speed = weather_data['wind']['speed']
 
-            self.wildfire_risk = detect_wildfire(weather_data)
-            wildfire_status = "High Wildfire Risk!" if self.wildfire_risk else "No Wildfire Risk"
+            self.heat_wave_risk = detect_heat_wave(weather_data)
+            heat_wave_status = "Heat Wave Alert!" if self.heat_wave_risk else "No Heat Wave Risk"
 
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.weather_label.configure(
-                text=f"Location: {location_name}\nWeather: {weather_desc.capitalize()}\nTemperature: {temp}°C\nHumidity: {humidity}%\nWind Speed: {wind_speed} m/s\n{wildfire_status}"
+                text=f"Location: {location_name}\nWeather: {weather_desc.capitalize()}\nTemperature: {temp}°C\nHumidity: {humidity}%\nWind Speed: {wind_speed} m/s\n{heat_wave_status}\nLast Updated: {current_time}"
             )
 
         self.anomalies = detect_anomalies(self.sensor_data)
-        fig = plot_data(self.sensor_data, self.anomalies, self.wildfire_risk)
+        fig = plot_data(self.sensor_data, self.anomalies, self.heat_wave_risk)
+        
+        # Clear previous plot if it exists
+        if self.plot_canvas_widget:
+            self.plot_canvas_widget.destroy()
+        
         canvas = FigureCanvasTkAgg(fig, master=self.anomalies_canvas)
+        self.plot_canvas_widget = canvas.get_tk_widget()
+        self.plot_canvas_widget.pack(fill="both", expand=True)
         canvas.draw()
-        canvas.get_tk_widget().pack()
+        
+        # Close the figure object to free memory after drawing
+        plt.close(fig)
 
     def fetch_image(self):
-        try:
-            lat = float(self.lat_entry.get())
-            lon = float(self.lon_entry.get())
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numerical values for latitude and longitude.")
+        location_name = self.location_entry.get().strip()
+        if not location_name:
+            messagebox.showerror("Invalid Input", "Please enter a location name.")
+            return
+
+        lat, lon, _ = fetch_coordinates(location_name)
+        if lat is None or lon is None:
+            messagebox.showerror("Error", "Could not find the specified location.")
             return
 
         image_url = fetch_satellite_image(lat, lon)
@@ -168,6 +190,11 @@ class SensorWebApp(ctk.CTk):
                 messagebox.showerror("Error", "Failed to fetch the satellite image.")
         else:
             messagebox.showinfo("No Image", "No satellite image available for the specified location.")
+
+    def on_closing(self):
+        # Stop all scheduled tasks before destroying the window
+        self.quit()
+        self.destroy()
 
 if __name__ == "__main__":
     app = SensorWebApp()
