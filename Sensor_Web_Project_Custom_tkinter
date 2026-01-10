@@ -1,0 +1,178 @@
+import customtkinter as ctk
+from tkinter import messagebox
+import requests
+import numpy as np
+from sklearn.ensemble import IsolationForest
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
+from PIL import Image, ImageTk
+import io
+from datetime import datetime
+
+NASA_API_KEY = 'Jf3gkg0LqSQhjJPyj4tvxy7UIuFyivVPkgxqT6fo'
+WEATHER_API_KEY = '3c15aae84bc404fb0d7f71ba9f7be271'
+
+def generate_sensor_data(num_points=100):
+    return np.random.normal(25, 5, num_points).tolist()
+
+def fetch_satellite_image(lat, lon):
+    url = f"https://api.nasa.gov/planetary/earth/assets"
+    params = {
+        'lon': lon,
+        'lat': lat,
+        'dim': 0.1,
+        'api_key': NASA_API_KEY
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        return data.get('url')
+    return None
+
+def fetch_weather_data(lat, lon):
+    url = f"http://api.openweathermap.org/data/2.5/weather"
+    params = {
+        'lat': lat,
+        'lon': lon,
+        'appid': WEATHER_API_KEY,
+        'units': 'metric'
+    }
+    response = requests.get(url, params=params)
+    return response.json() if response.status_code == 200 else None
+
+def fetch_coordinates(location_name):
+    url = f"http://api.openweathermap.org/geo/1.0/direct"
+    params = {
+        'q': location_name,
+        'limit': 1,
+        'appid': WEATHER_API_KEY
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200 and response.json():
+        location_data = response.json()[0]
+        return location_data.get('lat'), location_data.get('lon'), location_data.get('name')
+    return None, None, None
+
+def detect_anomalies(data):
+    model = IsolationForest(contamination=0.1, random_state=42)
+    predictions = model.fit_predict(np.array(data).reshape(-1, 1))
+    return [i for i, val in enumerate(predictions) if val == -1]
+
+def detect_heat_wave(weather_data):
+    temp = weather_data['main']['temp']
+    humidity = weather_data['main']['humidity']
+    return temp > 32 and humidity > 60  # Heat wave conditions: high temperature and high humidity
+
+def plot_data(data, anomalies, heat_wave_risk):
+    fig, ax = plt.subplots()
+    ax.plot(data, label='Sensor Data')
+    ax.scatter(anomalies, [data[i] for i in anomalies], color='r', label='Anomalies')
+    if heat_wave_risk:
+        ax.axhline(y=32, color='red', linestyle='--', label='Heat Wave Threshold')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Temperature')
+    ax.legend()
+    ax.grid(True)
+    return fig
+    
+
+class SensorWebApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Sensor Web Project")
+        self.geometry("1200x800")
+        ctk.set_appearance_mode("Dark")
+        ctk.set_default_color_theme("blue")
+
+        self.sensor_data = generate_sensor_data()
+        self.anomalies = []
+        self.heat_wave_risk = False
+
+        self.create_layout()
+
+    def create_layout(self):
+        self.left_frame = ctk.CTkFrame(self, width=700)
+        self.left_frame.pack(side="left", fill="both", expand=True, padx=20, pady=20)
+
+        self.location_entry = ctk.CTkEntry(self.left_frame, placeholder_text="Enter Location (e.g., London, Tokyo, New York)")
+        self.location_entry.pack(pady=10)
+
+        self.btn_fetch = ctk.CTkButton(self.left_frame, text="Fetch Location & Analyze", command=self.fetch_location_and_analyze)
+        self.btn_fetch.pack(pady=20)
+
+        self.weather_label = ctk.CTkLabel(self.left_frame, text="", wraplength=600, justify="left")
+        self.weather_label.pack(pady=10)
+
+        self.anomalies_canvas = ctk.CTkFrame(self.left_frame, width=700, height=350)
+        self.anomalies_canvas.pack(pady=20)
+
+        # Right Frame for satellite image fetching
+        self.right_frame = ctk.CTkFrame(self, width=400)
+        self.right_frame.pack(side="right", fill="y", padx=20, pady=20)
+
+        self.image_label = ctk.CTkLabel(self.right_frame, text=" ", width=300, height=300)
+        self.image_label.pack(pady=20)
+
+        self.btn_fetch_image = ctk.CTkButton(self.right_frame, text="Show Satellite Image", command=self.fetch_image)
+        self.btn_fetch_image.pack(pady=20)
+
+    def fetch_location_and_analyze(self):
+        location_name = self.location_entry.get().strip()
+        if not location_name:
+            messagebox.showerror("Invalid Input", "Please enter a location name.")
+            return
+
+        lat, lon, location_name = fetch_coordinates(location_name)
+        if lat is None or lon is None:
+            messagebox.showerror("Error", "Could not find the specified location.")
+            return
+        weather_data = fetch_weather_data(lat, lon)
+
+        if weather_data:
+            weather_desc = weather_data['weather'][0]['description']
+            temp = weather_data['main']['temp']
+            humidity = weather_data['main']['humidity']
+            wind_speed = weather_data['wind']['speed']
+
+            self.heat_wave_risk = detect_heat_wave(weather_data)
+            heat_wave_status = "Heat Wave Alert!" if self.heat_wave_risk else "No Heat Wave Risk"
+
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.weather_label.configure(
+                text=f"Location: {location_name}\nWeather: {weather_desc.capitalize()}\nTemperature: {temp}°C\nHumidity: {humidity}%\nWind Speed: {wind_speed} m/s\n{heat_wave_status}\nLast Updated: {current_time}"
+            )
+
+        self.anomalies = detect_anomalies(self.sensor_data)
+        fig = plot_data(self.sensor_data, self.anomalies, self.heat_wave_risk)
+        canvas = FigureCanvasTkAgg(fig, master=self.anomalies_canvas)
+        canvas.draw()
+        canvas.get_tk_widget().pack()
+
+    def fetch_image(self):
+        location_name = self.location_entry.get().strip()
+        if not location_name:
+            messagebox.showerror("Invalid Input", "Please enter a location name.")
+            return
+
+        lat, lon, _ = fetch_coordinates(location_name)
+        if lat is None or lon is None:
+            messagebox.showerror("Error", "Could not find the specified location.")
+            return
+
+        image_url = fetch_satellite_image(lat, lon)
+        if image_url:
+            response = requests.get(image_url)
+            if response.status_code == 200:
+                image_data = Image.open(io.BytesIO(response.content))
+                image_data.thumbnail((300, 300))
+                image = ImageTk.PhotoImage(image_data)
+                self.image_label.configure(image=image)
+                self.image_label.image = image
+            else:
+                messagebox.showerror("Error", "Failed to fetch the satellite image.")
+        else:
+            messagebox.showinfo("No Image", "No satellite image available for the specified location.")
+
+if __name__ == "__main__":
+    app = SensorWebApp()
+    app.mainloop()
