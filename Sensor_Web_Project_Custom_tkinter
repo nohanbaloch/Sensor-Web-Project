@@ -8,9 +8,14 @@ import matplotlib.pyplot as plt
 from PIL import Image, ImageTk
 import io
 from datetime import datetime
+import os
+from dotenv import load_dotenv
 
-NASA_API_KEY = 'Jf3gkg0LqSQhjJPyj4tvxy7UIuFyivVPkgxqT6fo'
-WEATHER_API_KEY = '3c15aae84bc404fb0d7f71ba9f7be271'
+# Load environment variables from .env file
+load_dotenv()
+
+NASA_API_KEY = os.getenv('NASA_API_KEY')
+WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
 
 def generate_sensor_data(num_points=100):
     return np.random.normal(25, 5, num_points).tolist()
@@ -64,7 +69,9 @@ def detect_heat_wave(weather_data):
     return temp > 32 and humidity > 60  # Heat wave conditions: high temperature and high humidity
 
 def plot_data(data, anomalies, heat_wave_risk):
-    fig, ax = plt.subplots()
+    # Create a figure without adding it to the global pyplot state to save memory
+    fig = plt.figure(figsize=(6, 4))
+    ax = fig.add_subplot(111)
     ax.plot(data, label='Sensor Data')
     ax.scatter(anomalies, [data[i] for i in anomalies], color='r', label='Anomalies')
     if heat_wave_risk:
@@ -87,8 +94,10 @@ class SensorWebApp(ctk.CTk):
         self.sensor_data = generate_sensor_data()
         self.anomalies = []
         self.heat_wave_risk = False
+        self.plot_canvas_widget = None
 
         self.create_layout()
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def create_layout(self):
         self.left_frame = ctk.CTkFrame(self, width=700)
@@ -144,9 +153,18 @@ class SensorWebApp(ctk.CTk):
 
         self.anomalies = detect_anomalies(self.sensor_data)
         fig = plot_data(self.sensor_data, self.anomalies, self.heat_wave_risk)
+        
+        # Clear previous plot if it exists
+        if self.plot_canvas_widget:
+            self.plot_canvas_widget.destroy()
+        
         canvas = FigureCanvasTkAgg(fig, master=self.anomalies_canvas)
+        self.plot_canvas_widget = canvas.get_tk_widget()
+        self.plot_canvas_widget.pack(fill="both", expand=True)
         canvas.draw()
-        canvas.get_tk_widget().pack()
+        
+        # Close the figure object to free memory after drawing
+        plt.close(fig)
 
     def fetch_image(self):
         location_name = self.location_entry.get().strip()
@@ -172,6 +190,11 @@ class SensorWebApp(ctk.CTk):
                 messagebox.showerror("Error", "Failed to fetch the satellite image.")
         else:
             messagebox.showinfo("No Image", "No satellite image available for the specified location.")
+
+    def on_closing(self):
+        # Stop all scheduled tasks before destroying the window
+        self.quit()
+        self.destroy()
 
 if __name__ == "__main__":
     app = SensorWebApp()
