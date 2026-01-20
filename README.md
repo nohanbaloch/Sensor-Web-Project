@@ -26,6 +26,8 @@ This project is a graphical user interface (GUI) application built using Python 
 
 The Sensor Web Project is designed to simulate a network of sensors capable of real-time data acquisition and analysis. It serves as a prototype for autonomous observation systems, demonstrating how satellite imagery and weather data can be integrated for environmental monitoring.
 
+![Sensor Web Project Screenshot](Screenshot.png)
+
 ## Objectives
 
 - Build a software system to integrate satellite and weather data from external APIs.
